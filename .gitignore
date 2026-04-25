@@ -1,0 +1,14 @@
+# Persönliche Daten
+memory.json
+chroma_db/
+
+# Python
+__pycache__/
+*.pyc
+.env
+
+# macOS
+.DS_Store
+
+# pyenv
+.python-version
