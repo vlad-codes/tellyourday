@@ -1,37 +1,46 @@
 import os
 import json
+import yaml
 import streamlit as st
 import ollama
 import chromadb
 from datetime import datetime
 
 # ─────────────────────────────────────────────
-# Konfiguration
+# Config
 # ─────────────────────────────────────────────
 
-MEMORY_FILE  = "memory.json"       # JSON-Backup (bleibt für Portabilität)
-CHROMA_DIR   = "chroma_db"         # Vektordatenbank-Ordner
-COLLECTION   = "memory"            # Name der chromadb-Collection
+MEMORY_FILE = "memory.json"   # JSON backup (kept for portability)
+CHROMA_DIR  = "chroma_db"     # Vector database folder
+COLLECTION  = "memory"        # ChromaDB collection name
 
-import yaml
+# Below this threshold: linear fallback instead of vector search
+VECTOR_MIN_ENTRIES = 15
+# Number of semantically similar entries injected into the prompt
+VECTOR_TOP_K = 5
+
 
 def load_config() -> dict:
+    """
+    Loads model config from config.yaml.
+    Falls back to defaults if the file doesn't exist.
+    """
+    defaults = {
+        "chat_model": "gemma4:e2b",
+        "embed_model": "nomic-embed-text"
+    }
     if not os.path.exists("config.yaml"):
-        return {
-            "chat_model": "fredrezones55/Gemma-4-Uncensored-HauhauCS-Aggressive:e2b",
-            "embed_model": "nomic-embed-text"
-        }
-    with open("config.yaml", "r") as f:
-        return yaml.safe_load(f)
+        return defaults
+    try:
+        with open("config.yaml", "r") as f:
+            config = yaml.safe_load(f)
+        return {**defaults, **config}
+    except Exception:
+        return defaults
 
-config = load_config()
+config     = load_config()
 CHAT_MODEL  = config["chat_model"]
 EMBED_MODEL = config["embed_model"]
-
-# Hybrid-Schwellwert: unter diesem Wert linearer Fallback statt Vektorsuche
-VECTOR_MIN_ENTRIES = 15
-# Anzahl semantisch ähnlicher Einträge die in den Prompt kommen
-VECTOR_TOP_K = 5
 
 
 # ─────────────────────────────────────────────
@@ -40,40 +49,40 @@ VECTOR_TOP_K = 5
 
 def get_embedding(text: str) -> list[float] | None:
     """
-    Generiert ein Embedding via Ollama (nomic-embed-text).
-    Gibt None zurück bei Fehler – Aufrufer fällt dann auf linearen Modus zurück.
+    Generates an embedding via Ollama (nomic-embed-text).
+    Returns None on error — caller falls back to linear mode.
     """
     try:
         resp = ollama.embeddings(model=EMBED_MODEL, prompt=text)
         return resp["embedding"]
     except Exception as e:
-        st.warning(f"Embedding-Fehler ({EMBED_MODEL}): {e}")
+        st.warning(f"Embedding error ({EMBED_MODEL}): {e}")
         return None
 
 
 # ─────────────────────────────────────────────
-# ChromaDB-Setup
+# ChromaDB setup
 # ─────────────────────────────────────────────
 
 def get_collection() -> chromadb.Collection:
     """
-    Gibt die ChromaDB-Collection zurück (gecacht in session_state).
-    Legt Datenbank und Collection an falls noch nicht vorhanden.
-    chromadb.PersistentClient speichert alles lokal in CHROMA_DIR –
-    kein Server, keine Konfiguration nötig.
+    Returns the ChromaDB collection (cached in session_state).
+    Creates the database and collection if they don't exist yet.
+    PersistentClient stores everything locally in CHROMA_DIR —
+    no server, no configuration needed.
     """
     if "chroma_collection" not in st.session_state:
         client = chromadb.PersistentClient(path=CHROMA_DIR)
         collection = client.get_or_create_collection(
             name=COLLECTION,
-            metadata={"hnsw:space": "cosine"}  # Kosinus-Distanz für Ähnlichkeitssuche
+            metadata={"hnsw:space": "cosine"}  # cosine distance for similarity search
         )
         st.session_state.chroma_collection = collection
     return st.session_state.chroma_collection
 
 
 def count_entries() -> int:
-    """Gibt die Anzahl gespeicherter Einträge zurück."""
+    """Returns the total number of stored memory entries."""
     return get_collection().count()
 
 
@@ -83,8 +92,8 @@ def count_entries() -> int:
 
 def migrate_json_to_chroma(entries: list) -> None:
     """
-    Einmalige Migration: Bestehende memory.json Einträge in ChromaDB übertragen.
-    Verwendet timestamp als eindeutige ID – überspringt bereits vorhandene Einträge.
+    One-time migration: transfers existing memory.json entries into ChromaDB.
+    Uses timestamp as unique ID — skips entries that already exist.
     """
     if not entries:
         return
@@ -107,7 +116,7 @@ def migrate_json_to_chroma(entries: list) -> None:
                 metadatas=[{"timestamp": entry["timestamp"]}]
             )
         else:
-            # Ohne Embedding: nur Text speichern, ChromaDB generiert intern einen Fallback
+            # No embedding available: store text only, ChromaDB handles internally
             collection.add(
                 ids=[entry_id],
                 documents=[entry["summary"]],
@@ -116,17 +125,17 @@ def migrate_json_to_chroma(entries: list) -> None:
         migrated += 1
 
     if migrated:
-        st.toast(f"{migrated} ältere Einträge in Vektordatenbank migriert.")
+        st.toast(f"{migrated} older entries migrated into vector database.")
 
 
 # ─────────────────────────────────────────────
-# Eintrag speichern
+# Save entry
 # ─────────────────────────────────────────────
 
 def save_entry_to_chroma(timestamp: str, summary: str) -> bool:
     """
-    Speichert einen neuen Eintrag mit Embedding in ChromaDB.
-    Gibt True zurück bei Erfolg.
+    Saves a new entry with embedding into ChromaDB.
+    Returns True on success.
     """
     try:
         collection = get_collection()
@@ -146,22 +155,22 @@ def save_entry_to_chroma(timestamp: str, summary: str) -> bool:
             )
         return True
     except Exception as e:
-        st.error(f"ChromaDB-Fehler beim Speichern: {e}")
+        st.error(f"ChromaDB error while saving: {e}")
         return False
 
 
 # ─────────────────────────────────────────────
-# Memory-Abruf
+# Memory retrieval
 # ─────────────────────────────────────────────
 
 def get_relevant_entries(query: str) -> list[dict]:
     """
-    Hybrid-Strategie:
-    - Unter VECTOR_MIN_ENTRIES: die letzten N Einträge chronologisch
-      (zu wenig Daten für bedeutungsvolle Vektorsuche)
-    - Ab VECTOR_MIN_ENTRIES: semantische Suche via Kosinus-Ähnlichkeit
+    Hybrid strategy:
+    - Below VECTOR_MIN_ENTRIES: returns the last N entries chronologically
+      (not enough data for meaningful vector search)
+    - At or above VECTOR_MIN_ENTRIES: semantic search via cosine similarity
 
-    Gibt immer eine Liste von {"timestamp": ..., "summary": ...} zurück.
+    Always returns a list of {"timestamp": ..., "summary": ...}
     """
     collection = get_collection()
     total = collection.count()
@@ -169,21 +178,20 @@ def get_relevant_entries(query: str) -> list[dict]:
     if total == 0:
         return []
 
-    # Linearer Fallback bei wenig Daten
+    # Linear fallback for small datasets
     if total < VECTOR_MIN_ENTRIES:
         result = collection.get(include=["documents", "metadatas"])
         entries = [
             {"timestamp": m["timestamp"], "summary": d}
             for m, d in zip(result["metadatas"], result["documents"])
         ]
-        # Chronologisch sortieren, neueste zuletzt
         entries.sort(key=lambda e: e["timestamp"])
         return entries[-VECTOR_TOP_K:]
 
-    # Semantische Suche
+    # Semantic search
     query_embedding = get_embedding(query)
     if query_embedding is None:
-        # Embedding-Fehler → linearer Fallback
+        # Embedding error → linear fallback
         result = collection.get(include=["documents", "metadatas"])
         entries = [
             {"timestamp": m["timestamp"], "summary": d}
@@ -206,14 +214,14 @@ def get_relevant_entries(query: str) -> list[dict]:
 
 
 # ─────────────────────────────────────────────
-# JSON-Backup
+# JSON backup
 # ─────────────────────────────────────────────
 
 def load_memory_json() -> list:
     """
-    Lädt Einträge aus memory.json.
-    Wird nur für die einmalige Migration beim ersten Start benötigt.
-    Unterstützt altes String-Format für Rückwärtskompatibilität.
+    Loads entries from memory.json.
+    Only used for the one-time migration on first launch.
+    Supports legacy string format for backwards compatibility.
     """
     if not os.path.exists(MEMORY_FILE):
         return []
@@ -222,73 +230,73 @@ def load_memory_json() -> list:
             data = json.load(f)
         if isinstance(data, dict) and "memory" in data and isinstance(data["memory"], str):
             if data["memory"].strip():
-                return [{"timestamp": "Archiv (Alt)", "summary": data["memory"]}]
+                return [{"timestamp": "Archive (legacy)", "summary": data["memory"]}]
             return []
         return data.get("entries", [])
     except Exception as e:
-        st.error(f"Fehler beim Laden der {MEMORY_FILE}: {e}")
+        st.error(f"Error loading {MEMORY_FILE}: {e}")
         return []
 
 
 def save_memory_json(entries: list) -> bool:
-    """Schreibt alle Einträge als JSON-Backup (menschenlesbar, portabel)."""
+    """Writes all entries as a human-readable JSON backup."""
     try:
         with open(MEMORY_FILE, "w", encoding="utf-8") as f:
             json.dump({"entries": entries}, f, ensure_ascii=False, indent=4)
         return True
     except Exception as e:
-        st.error(f"Fehler beim Speichern in {MEMORY_FILE}: {e}")
+        st.error(f"Error saving {MEMORY_FILE}: {e}")
         return False
 
 
 # ─────────────────────────────────────────────
-# System-Prompt
+# System prompt
 # ─────────────────────────────────────────────
 
 def build_system_prompt(relevant_entries: list[dict]) -> dict:
     """
-    Baut den System-Prompt mit semantisch relevanten Erinnerungen.
-    Explizite Verhaltensregeln statt vager Adjektive.
+    Builds the system prompt with semantically relevant memories.
+    Uses explicit behavioral rules instead of vague adjectives.
     """
     if relevant_entries:
         memory_text = "\n\n".join(
             [f"[{e['timestamp']}]\n{e['summary']}" for e in relevant_entries]
         )
     else:
-        memory_text = "Keine früheren Gespräche vorhanden."
+        memory_text = "No previous conversations on record."
 
     return {
         "role": "system",
         "content": (
-            "Du bist ein ruhiger, ehrlicher Reflexionsbegleiter. "
-            "Du kennst den Nutzer aus vergangenen Gesprächen.\n\n"
-            f"RELEVANTE ERINNERUNGEN (semantisch zum aktuellen Thema):\n{memory_text}\n\n"
-            "VERHALTENSREGELN:\n"
-            "1. Wenn der Nutzer einfach erzählt (kein explizites Fragezeichen): "
-            "Validiere, spiegele, mach keinen Vorschlag und stelle KEINE Gegenfragen.\n"
-            "2. Wenn der Nutzer explizit nach deiner Meinung fragt: "
-            "Sei direkt, ungefiltert und konkret. Kein Herumreden.\n"
-            "3. Wenn der Nutzer Hilfe oder Rat sucht: "
-            "Ermutige konkret und handlungsorientiert.\n"
-            "4. Beziehe dich auf die Erinnerungen NUR wenn es einen direkten, "
-            "natürlichen Bezug zum aktuellen Thema gibt. Erzwinge keine Verbindungen.\n\n"
-            "VERBOTEN:\n"
-            "- 'Als KI habe ich keine Gefühle' oder ähnliche Distanzierungsfloskeln\n"
-            "- Endlose Reflexionsfragen (maximal eine, wenn wirklich nötig)\n"
-            "- Aufgesetzte Empathie-Phrasen wie 'Das klingt wirklich herausfordernd für dich'\n"
-            "- Weitschweifige philosophische Schlüsse aus kleinen Alltagsdingen"
+            "You are a calm, honest reflection companion. "
+            "You know the user from past conversations.\n\n"
+            f"RELEVANT MEMORIES (semantically matched to current topic):\n{memory_text}\n\n"
+            "BEHAVIORAL RULES:\n"
+            "1. If the user is simply sharing (no explicit question mark): "
+            "validate and mirror what they said. Make no suggestions and ask NO follow-up questions.\n"
+            "2. If the user explicitly asks for your opinion: "
+            "be direct, unfiltered, and concrete. No beating around the bush.\n"
+            "3. If the user is looking for help or advice: "
+            "encourage them concretely and action-oriented.\n"
+            "4. Only reference memories when there is a direct, natural connection "
+            "to the current topic. Never force connections.\n\n"
+            "FORBIDDEN:\n"
+            "- 'As an AI I have no feelings' or similar distancing phrases\n"
+            "- Endless follow-up questions (one maximum, only if truly necessary)\n"
+            "- Hollow empathy phrases like 'That sounds really challenging for you'\n"
+            "- Sweeping philosophical conclusions drawn from small everyday things"
         )
     }
 
 
 # ─────────────────────────────────────────────
-# UI Setup
+# UI
 # ─────────────────────────────────────────────
 
 st.set_page_config(page_title="Tell me your day", page_icon="📓")
 st.title("Tell me your day 📓")
 
-# Session State initialisieren
+# Initialize session state
 if "messages" not in st.session_state:
     st.session_state.messages = []
 if "already_saved" not in st.session_state:
@@ -296,38 +304,38 @@ if "already_saved" not in st.session_state:
 if "json_entries" not in st.session_state:
     st.session_state.json_entries = load_memory_json()
 
-# ChromaDB initialisieren + einmalige Migration aus JSON
+# Initialize ChromaDB + one-time migration from JSON
 get_collection()
 if not st.session_state.get("migration_done"):
     migrate_json_to_chroma(st.session_state.json_entries)
     st.session_state.migration_done = True
 
-# Sidebar: Status
+# Sidebar status
 total = count_entries()
-mode = "linear" if total < VECTOR_MIN_ENTRIES else "semantisch"
-st.sidebar.caption(f"Gedächtnis: {total} Einträge · Modus: {mode}")
+mode = "linear" if total < VECTOR_MIN_ENTRIES else "semantic"
+st.sidebar.caption(f"Memory: {total} entries · Mode: {mode}")
 if total < VECTOR_MIN_ENTRIES:
     st.sidebar.caption(
-        f"Vektorsuche aktiv ab {VECTOR_MIN_ENTRIES} Einträgen "
-        f"({VECTOR_MIN_ENTRIES - total} fehlen noch)"
+        f"Vector search active from {VECTOR_MIN_ENTRIES} entries "
+        f"({VECTOR_MIN_ENTRIES - total} to go)"
     )
 
 
 # ─────────────────────────────────────────────
-# Chat rendern
+# Render chat
 # ─────────────────────────────────────────────
 
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
 
-if user_input := st.chat_input("Wie war dein Tag?"):
+if user_input := st.chat_input("How was your day?"):
 
     st.session_state.messages.append({"role": "user", "content": user_input})
     with st.chat_message("user"):
         st.markdown(user_input)
 
-    # Semantisch relevante Einträge abrufen
+    # Retrieve semantically relevant entries
     relevant = get_relevant_entries(user_input)
     system_prompt = build_system_prompt(relevant)
     messages_for_llm = [system_prompt] + st.session_state.messages
@@ -346,36 +354,36 @@ if user_input := st.chat_input("Wie war dein Tag?"):
         except Exception as e:
             response_placeholder.empty()
             st.error(
-                f"Ollama nicht erreichbar. Läuft `ollama serve`?\n\n"
-                f"Technischer Fehler: {e}"
+                f"Cannot reach Ollama. Is `ollama serve` running?\n\n"
+                f"Error: {e}"
             )
 
 
 # ─────────────────────────────────────────────
-# Gespräch beenden & Langzeitspeicherung
+# End session & save
 # ─────────────────────────────────────────────
 
 st.divider()
 
 if st.session_state.already_saved:
-    st.success("Dieser Tag wurde bereits gespeichert. Starte die App neu für ein neues Gespräch.")
+    st.success("Today's session has already been saved. Restart the app to begin a new conversation.")
 
-elif st.button("Gespräch beenden & Tag speichern"):
+elif st.button("End conversation & save today"):
     if not st.session_state.messages:
-        st.warning("Es gibt noch keinen Chatverlauf zum Speichern.")
+        st.warning("No conversation to save yet.")
     else:
-        with st.spinner("Zusammenfassung wird generiert und gespeichert..."):
+        with st.spinner("Generating summary and saving..."):
             history_text = "\n".join(
                 [f"{m['role'].capitalize()}: {m['content']}" for m in st.session_state.messages]
             )
             summary_prompt = (
-                f"Hier ist unser heutiges Gespräch:\n\n{history_text}\n\n"
-                "Fasse DIESES Gespräch extrem kompakt in 3-4 Sätzen für die Langzeitspeicherung zusammen. "
-                "Was war wichtig, wie war die Stimmung?\n\n"
-                "ABSOLUTE REGELN:\n"
-                "- Fasse ausschließlich die heutigen Inhalte zusammen.\n"
-                "- Konstruiere KEINE Verbindungen zu Themen aus der Vergangenheit.\n"
-                "- Bleib sachlich, direkt. Keine Poesie, keine Lebensweisheiten."
+                f"Here is our conversation from today:\n\n{history_text}\n\n"
+                "Summarize THIS conversation in 3-4 sentences for long-term storage. "
+                "What was important, what was the mood?\n\n"
+                "ABSOLUTE RULES:\n"
+                "- Summarize only today's content.\n"
+                "- Do NOT construct connections to past topics.\n"
+                "- Stay factual and direct. No poetry, no life lessons."
             )
             try:
                 summary_response = ollama.chat(
@@ -386,18 +394,18 @@ elif st.button("Gespräch beenden & Tag speichern"):
                 new_summary = summary_response["message"]["content"]
                 timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-                # In ChromaDB speichern (mit Embedding)
+                # Save to ChromaDB (with embedding)
                 chroma_ok = save_entry_to_chroma(timestamp, new_summary)
 
-                # JSON-Backup aktualisieren
+                # Update JSON backup
                 new_entry = {"timestamp": timestamp, "summary": new_summary}
                 st.session_state.json_entries.append(new_entry)
                 save_memory_json(st.session_state.json_entries)
 
                 if chroma_ok:
                     st.session_state.already_saved = True
-                    st.success("Erfolgreich gespeichert!")
-                    st.info(f"**Neue Zusammenfassung:**\n{new_summary}")
+                    st.success("Saved successfully!")
+                    st.info(f"**Summary:**\n{new_summary}")
 
             except Exception as e:
-                st.error(f"Fehler bei der Zusammenfassung mit Ollama: {e}")
+                st.error(f"Error generating summary: {e}")
