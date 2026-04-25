@@ -12,7 +12,7 @@ Ein lokaler, privater KI-Reflexionsbegleiter. Läuft vollständig auf deinem Com
 1. Modelle laden:
 ```bash
 ollama pull nomic-embed-text
-ollama pull <dein-modell>
+ollama pull gemma3:4b  # kann in config.yaml jederzeit geändert werden
 ```
 
 2. Dependencies installieren:
