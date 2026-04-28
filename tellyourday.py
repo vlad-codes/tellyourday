@@ -388,13 +388,16 @@ def run_save_flow():
         [f"{m['role'].capitalize()}: {m['content']}" for m in st.session_state.messages]
     )
     summary_prompt = (
-        f"Here is our conversation from today:\n\n{history_text}\n\n"
+        f"Here is today's conversation:\n\n{history_text}\n\n"
         "Return exactly two things, nothing else:\n\n"
-        "TITLE: a single line, max 8 words, capturing the essence of today\n"
-        "SUMMARY: 3-4 sentences, factual, what was important and what was the mood\n\n"
+        "TITLE: a single line, max 8 words, capturing what was on the user's mind today\n"
+        "SUMMARY: 3-4 sentences written from Telmi's perspective about the USER — "
+        "what they shared, how they felt, what mattered to them. "
+        "Write 'You' when referring to the user. Never describe the conversation itself. "
+        "Never mention Telmi. Only what the user brought up and their mood.\n\n"
         "RULES:\n"
-        "- Summarize only today's content\n"
-        "- No connections to past topics\n"
+        "- Focus entirely on the user, not the exchange\n"
+        "- No meta-commentary like 'the conversation was about'\n"
         "- No poetry, no life lessons\n"
         "- Output only TITLE: and SUMMARY: labels, nothing else"
     )
