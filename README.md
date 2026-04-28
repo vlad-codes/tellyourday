@@ -4,7 +4,7 @@ Hi, this is my first GitHub project. It's vibe coded.
 
 A local, private AI reflection companion. Runs entirely on your computer — no cloud, no API costs, no data sharing.
 
-Built on **Gemma 4 E2B** — Google's most capable compact model. Multimodal, strong context handling, and fast enough for fluid conversation on consumer hardware. This setup is explicitly built and tested around Gemma 4 E2B.
+Built on **Gemma 4 E2B** — Google's most capable compact model. Multimodal, strong context handling, and fast enough for fluid conversation on consumer hardware.
 
 ## Requirements
 
@@ -29,14 +29,15 @@ pip3 install -r requirements.txt
 python3 -m streamlit run tellyourday.py
 ```
 
-That's it. The app runs with `gemma4:e2b` by default. To use a different model, edit `config.yaml`:
-
-```yaml
-chat_model: "your-model-name"
-embed_model: "nomic-embed-text"
-```
-
 > **macOS:** Always use `python3 -m streamlit run` instead of `streamlit run`
+
+## How it works
+
+Chat with Telmi — your personal reflection companion. Just type what's on your mind. No prompts needed.
+
+When you're done, hit **End conversation & save**. Telmi summarizes your day and stores it locally. Over time, Telmi remembers past conversations and uses them to personalize responses.
+
+Switch models anytime from the sidebar — any model you have installed in Ollama works.
 
 ## Privacy
 
