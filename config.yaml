@@ -1,2 +1,2 @@
-chat_model: "gemma4:e2b"
+chat_model: "nathanstuffs/teecue:latest"
 embed_model: "nomic-embed-text"
