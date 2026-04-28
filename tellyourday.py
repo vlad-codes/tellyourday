@@ -379,7 +379,8 @@ def build_system_prompt(relevant_entries: list[dict]) -> dict:
 # ─────────────────────────────────────────────
 
 def run_save_flow():
-    if not st.session_state.messages:
+    has_user_messages = any(m["role"] == "user" for m in st.session_state.messages)
+    if not has_user_messages:
         st.session_state.save_warning = "No conversation to save yet."
         return
 
@@ -493,12 +494,6 @@ total = count_entries()
 mode = "linear mode" if total < VECTOR_MIN_ENTRIES else "semantic mode"
 
 with st.sidebar:
-    st.caption(f"{total} entries · {mode}")
-    if total < VECTOR_MIN_ENTRIES:
-        st.caption(f"vector search active at {VECTOR_MIN_ENTRIES} ({VECTOR_MIN_ENTRIES - total} to go)")
-
-    st.divider()
-
     # Model selector
     available_models = get_available_models()
     current_index = available_models.index(st.session_state.selected_model) \
@@ -507,7 +502,8 @@ with st.sidebar:
     new_model = st.selectbox("Model", available_models, index=current_index)
 
     if new_model != st.session_state.selected_model:
-        if st.session_state.messages and not st.session_state.already_saved:
+        has_user_messages = any(m["role"] == "user" for m in st.session_state.messages)
+        if has_user_messages and not st.session_state.already_saved:
             st.session_state.model_changed = True
         st.session_state.selected_model = new_model
 
@@ -520,7 +516,10 @@ with st.sidebar:
     if st.session_state.already_saved:
         st.success("Session saved.")
         if st.button("New Session", use_container_width=True):
-            st.session_state.messages = []
+            st.session_state.messages = [{
+                "role": "assistant",
+                "content": "Hey, I'm Telmi — your personal reflection companion.\n\nI'm here to listen, not to judge. Just tell me what's been on your mind today — big or small, good or bad.\n\nI remember our past conversations and I'm curious how you're doing."
+            }]
             st.session_state.already_saved = False
             st.session_state.last_saved = None
             st.session_state.model_changed = False
@@ -529,6 +528,23 @@ with st.sidebar:
         if st.button("End conversation & save", use_container_width=True):
             st.session_state.trigger_save = True
             st.rerun()
+    st.divider()
+    st.caption("""
+**How it works**
+
+Type freely — there's no right or wrong way to start. Just write what's on your mind.
+
+When you're done, hit **End conversation & save**. Your session gets summarized and stored locally — no cloud, no data sharing.
+
+To switch models, use the dropdown above. Start a **New Session** afterwards so the new model takes effect cleanly.
+
+Your conversation history is used to personalize responses over time.
+""")
+    
+    st.divider()
+    st.caption(f"{total} memories stored")
+    if total < VECTOR_MIN_ENTRIES:
+        st.caption(f"Smart search activates at {VECTOR_MIN_ENTRIES} memories — {VECTOR_MIN_ENTRIES - total} to go.")
 
 # ─────────────────────────────────────────────
 # Handle save trigger (runs once after sidebar click)
