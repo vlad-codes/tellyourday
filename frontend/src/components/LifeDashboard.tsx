@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { CalendarDay } from '../types';
+import type { CalendarDay, StatsData } from '../types';
 
 const API = 'http://localhost:8000';
 
@@ -40,6 +40,23 @@ function computeStreak(days: CalendarDay[]): number {
   return streak;
 }
 
+const ACHIEVEMENTS: { id: string; icon: string; label: string }[] = [
+  { id: 'first_entry', icon: '✍️', label: 'First Entry' },
+  { id: 'week_streak', icon: '🔥', label: 'Week Streak' },
+  { id: 'month_streak', icon: '💪', label: 'Month Strong' },
+  { id: 'bookworm',     icon: '📖', label: 'Bookworm (50 entries)' },
+  { id: 'century',      icon: '💯', label: 'Century Club (100 entries)' },
+];
+
+const STREAK_MILESTONES = [3, 7, 14, 21, 30, 100, 365];
+
+function nextStreakMilestone(streak: number): { next: number; prev: number } | null {
+  const next = STREAK_MILESTONES.find((m) => m > streak);
+  if (next === undefined) return null;
+  const prev = [...STREAK_MILESTONES].reverse().find((m) => m <= streak) ?? 0;
+  return { next, prev };
+}
+
 function getDaysInMonth(year: number, month: number): number {
   return new Date(year, month + 1, 0).getDate();
 }
@@ -70,6 +87,16 @@ export default function LifeDashboard({ onDayClick, onOpenArchive, refreshKey }:
   const [statsPos, setStatsPos] = useState<{ bottom: number; left: number } | null>(null);
   const statsButtonRef = useRef<HTMLButtonElement>(null);
   const statsCloseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [stats, setStats] = useState<StatsData | null>(null);
+  const [hoveredBadge, setHoveredBadge] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!statsOpen) return;
+    fetch(`${API}/stats`)
+      .then((r) => r.ok ? r.json() : null)
+      .then((data) => { if (data) setStats(data as StatsData); })
+      .catch(() => {});
+  }, [statsOpen, refreshKey]);
 
   function statsMouseEnter() {
     if (statsCloseTimer.current) clearTimeout(statsCloseTimer.current);
@@ -319,22 +346,99 @@ export default function LifeDashboard({ onDayClick, onOpenArchive, refreshKey }:
                         uppercase tracking-widest mb-3">
             Your stats
           </p>
-          <div className="flex flex-col gap-2.5 text-[12px] text-slate-500 dark:text-slate-400">
-            <div className="flex justify-between">
-              <span>Streak</span>
-              <span className="font-semibold text-slate-700 dark:text-slate-200">— days</span>
+
+          {/* Streak hero */}
+          {(() => {
+            const s = stats?.streak ?? streak;
+            const milestone = nextStreakMilestone(s);
+            const progress = milestone
+              ? (s - milestone.prev) / (milestone.next - milestone.prev)
+              : 1;
+            return (
+              <div className="mb-3">
+                <div className="flex items-baseline gap-1.5 mb-0.5">
+                  {s > 0 && <span className="text-[13px]">🔥</span>}
+                  <span className="text-[22px] font-bold leading-none
+                                   text-amber-500 dark:text-amber-400">
+                    {s}
+                  </span>
+                  <span className="text-[11px] text-slate-400 dark:text-slate-500">
+                    {s === 1 ? 'day in a row' : 'days in a row'}
+                  </span>
+                </div>
+                {milestone ? (
+                  <div className="flex items-center gap-2 mt-1.5">
+                    <div className="flex-1 h-0.5 rounded-full bg-slate-200 dark:bg-white/[0.08] overflow-hidden">
+                      <div
+                        className="h-full rounded-full bg-indigo-500 dark:bg-indigo-400 transition-all duration-500"
+                        style={{ width: `${Math.min(progress * 100, 100)}%` }}
+                      />
+                    </div>
+                    <span className="text-[10px] text-slate-400 dark:text-slate-500 shrink-0">
+                      → {milestone.next}d
+                    </span>
+                  </div>
+                ) : (
+                  <p className="text-[10px] text-indigo-400 dark:text-indigo-500 mt-1">✦ Legend</p>
+                )}
+              </div>
+            );
+          })()}
+
+          {/* Counts grid */}
+          <div className="grid grid-cols-2 gap-x-3 gap-y-2 mb-3">
+            {[
+              { val: stats?.total ?? '—', label: 'total' },
+              { val: stats?.this_month ?? '—', label: 'this month' },
+            ].map(({ val, label }) => (
+              <div key={label}>
+                <div className="text-[18px] font-bold leading-none
+                                text-slate-700 dark:text-slate-100">
+                  {val}
+                </div>
+                <div className="text-[10px] text-slate-400 dark:text-slate-500 mt-0.5">
+                  {label}
+                </div>
+              </div>
+            ))}
+            <div className="col-span-2">
+              <span className="text-[15px] font-semibold text-slate-700 dark:text-slate-100">
+                {stats?.avg_per_week ?? '—'}
+              </span>
+              <span className="text-[10px] text-slate-400 dark:text-slate-500 ml-1.5">
+                per week
+              </span>
             </div>
-            <div className="flex justify-between">
-              <span>This month</span>
-              <span className="font-semibold text-slate-700 dark:text-slate-200">— entries</span>
+          </div>
+
+          {/* Badge shelf */}
+          <div className="pt-2.5 border-t border-slate-200/60 dark:border-white/[0.07]">
+            <p className="text-[10px] font-semibold text-indigo-500 dark:text-indigo-400
+                          uppercase tracking-widest mb-2">
+              Achievements
+            </p>
+            <div className="flex gap-1.5">
+              {ACHIEVEMENTS.map(({ id, icon, label }) => {
+                const earned = stats?.achievements.includes(id) ?? false;
+                return (
+                  <span
+                    key={id}
+                    onMouseEnter={() => setHoveredBadge(label)}
+                    onMouseLeave={() => setHoveredBadge(null)}
+                    className="text-[16px] leading-none transition-opacity duration-200 cursor-default"
+                    style={{ opacity: earned ? 1 : 0.15 }}
+                  >
+                    {icon}
+                  </span>
+                );
+              })}
             </div>
-            <div className="flex justify-between">
-              <span>All time</span>
-              <span className="font-semibold text-slate-700 dark:text-slate-200">— entries</span>
-            </div>
-            <div className="flex justify-between">
-              <span>Avg. per week</span>
-              <span className="font-semibold text-slate-700 dark:text-slate-200">—</span>
+            <div className="h-3.5 mt-1">
+              {hoveredBadge && (
+                <p className="text-[10px] text-slate-400 dark:text-slate-500 truncate">
+                  {hoveredBadge}
+                </p>
+              )}
             </div>
           </div>
         </div>

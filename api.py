@@ -3,7 +3,7 @@ import json
 import ollama
 import chromadb
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -87,6 +87,13 @@ class CalendarDay(BaseModel):
     timestamp: str  # full "YYYY-MM-DD HH:MM:SS"
     title: str
     summary: str
+
+class StatsResponse(BaseModel):
+    streak: int
+    total: int
+    this_month: int
+    avg_per_week: float
+    achievements: list[str]
 
 
 # ─────────────────────────────────────────────
@@ -535,6 +542,52 @@ def get_calendar_data():
             summary=e.get("summary", "")[:200],
         ))
     return result
+
+
+@app.get("/stats", response_model=StatsResponse)
+def get_stats():
+    entries = load_memory_json()
+    valid = [e for e in entries if e.get("timestamp") and e["timestamp"] != "Archive (legacy)"]
+
+    total = len(valid)
+
+    today = date.today()
+    this_month_prefix = today.strftime("%Y-%m")
+    this_month = sum(1 for e in valid if e["timestamp"].startswith(this_month_prefix))
+
+    dates = {e["timestamp"][:10] for e in valid}
+    streak = 0
+    cursor = today
+    while cursor.isoformat() in dates:
+        streak += 1
+        cursor -= timedelta(days=1)
+
+    if total == 0:
+        avg_per_week = 0.0
+    else:
+        first_date = date.fromisoformat(min(dates))
+        weeks = max((today - first_date).days / 7, 1)
+        avg_per_week = round(total / weeks, 1)
+
+    achievements: list[str] = []
+    if total >= 1:
+        achievements.append("first_entry")
+    if streak >= 7:
+        achievements.append("week_streak")
+    if streak >= 30:
+        achievements.append("month_streak")
+    if total >= 50:
+        achievements.append("bookworm")
+    if total >= 100:
+        achievements.append("century")
+
+    return StatsResponse(
+        streak=streak,
+        total=total,
+        this_month=this_month,
+        avg_per_week=avg_per_week,
+        achievements=achievements,
+    )
 
 
 @app.get("/entries", response_model=list[Entry])

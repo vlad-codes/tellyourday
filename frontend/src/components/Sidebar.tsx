@@ -28,7 +28,7 @@ export default function Sidebar({
   calendarRefreshKey,
 }: SidebarProps) {
   return (
-    <aside className="glass-sidebar w-60 shrink-0 flex flex-col h-full">
+    <aside className="glass-sidebar w-60 shrink-0 flex flex-col h-full z-10">
       {/* Traffic-light drag region */}
       <div
         className="h-10 shrink-0 cursor-default"

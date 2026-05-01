@@ -25,3 +25,11 @@ export interface CalendarDay {
   title: string;
   summary: string;
 }
+
+export interface StatsData {
+  streak: number;
+  total: number;
+  this_month: number;
+  avg_per_week: number;
+  achievements: string[];
+}
