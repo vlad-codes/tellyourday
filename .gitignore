@@ -24,7 +24,7 @@ dist/
 .claude/
 
 # Interne Dokumente
-TELMI_BRIEFING.md
+Internal/
 
 # pyenv
 .python-version
