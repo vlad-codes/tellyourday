@@ -38,6 +38,11 @@ Telmi is a native macOS companion powered by local AI. Talk about your day, work
 
 > macOS only. Apple Silicon (M1 and later).
 
+> **"Telmi is damaged and can't be opened"** — this is a Gatekeeper warning because the app isn't signed with an Apple certificate. Run this once in Terminal, then open normally:
+> ```bash
+> xattr -cr /Applications/Telmi.app
+> ```
+
 ---
 
 ## Setup
