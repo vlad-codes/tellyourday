@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { invoke } from '@tauri-apps/api/core';
+import { getVersion } from '@tauri-apps/api/app';
 import type { AppStatus, ChatMessage, Mode } from './types';
 import Sidebar from './components/Sidebar';
 import Chat from './components/Chat';
@@ -8,6 +9,32 @@ import ArchiveModal from './components/ArchiveModal';
 import Onboarding from './components/Onboarding';
 
 const API = 'http://localhost:8000';
+
+type UpdateState = 'idle' | 'checking' | 'up-to-date' | 'available' | 'error';
+
+function useUpdateCheck() {
+  const [state, setState] = useState<UpdateState>('idle');
+  const [latestVersion, setLatestVersion] = useState<string | null>(null);
+  const [releaseUrl, setReleaseUrl] = useState<string | null>(null);
+
+  async function check() {
+    setState('checking');
+    try {
+      const current = await getVersion();
+      const res = await fetch('https://api.github.com/repos/vlad-codes/telmi-journal/releases/latest');
+      if (!res.ok) throw new Error();
+      const data = await res.json();
+      const latest = (data.tag_name as string).replace(/^v/, '');
+      setLatestVersion(latest);
+      setReleaseUrl(data.html_url as string);
+      setState(latest !== current ? 'available' : 'up-to-date');
+    } catch {
+      setState('error');
+    }
+  }
+
+  return { state, latestVersion, releaseUrl, check };
+}
 
 interface StatusResponse {
   ollama_running: boolean;
@@ -32,6 +59,7 @@ export default function App() {
   const [isReturning, setIsReturning] = useState(() => !!localStorage.getItem('telmi_introduced'));
   const [modelStatus, setModelStatus] = useState<ModelStatus>('ready');
   const switchingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const update = useUpdateCheck();
 
   useEffect(() => {
     document.documentElement.classList.toggle('dark', isDark);
@@ -183,6 +211,63 @@ export default function App() {
           initialChatTimestamp={archiveTimestamp}
         />
       )}
+      {/* Update check button */}
+      <div className="fixed top-[9px] right-14 z-20 flex items-center">
+        {update.state === 'idle' && (
+          <button
+            onClick={update.check}
+            className="h-[22px] px-2 flex items-center rounded-md text-[10px]
+                       text-slate-400 dark:text-slate-500
+                       border border-slate-200/70 dark:border-white/[0.08]
+                       hover:text-slate-600 dark:hover:text-slate-300
+                       hover:border-slate-300/80 dark:hover:border-white/[0.14]
+                       transition-all duration-150"
+          >
+            Check for updates
+          </button>
+        )}
+        {update.state === 'checking' && (
+          <span className="h-[22px] px-2 flex items-center rounded-md text-[10px]
+                           text-slate-400 dark:text-slate-500
+                           border border-slate-200/70 dark:border-white/[0.08]">
+            Checking…
+          </span>
+        )}
+        {update.state === 'up-to-date' && (
+          <span className="h-[22px] px-2 flex items-center rounded-md text-[10px]
+                           text-emerald-500 dark:text-emerald-400
+                           border border-emerald-300/50 dark:border-emerald-400/25">
+            Up to date
+          </span>
+        )}
+        {update.state === 'available' && (
+          <a
+            href={update.releaseUrl ?? '#'}
+            target="_blank"
+            rel="noreferrer"
+            className="h-[22px] px-2 flex items-center rounded-md text-[10px]
+                       text-indigo-500 dark:text-indigo-400
+                       border border-indigo-300/50 dark:border-indigo-400/25
+                       hover:border-indigo-400/70 dark:hover:border-indigo-400/50
+                       transition-all duration-150"
+          >
+            v{update.latestVersion} available →
+          </a>
+        )}
+        {update.state === 'error' && (
+          <button
+            onClick={update.check}
+            className="h-[22px] px-2 flex items-center rounded-md text-[10px]
+                       text-red-400 dark:text-red-400
+                       border border-red-300/50 dark:border-red-400/25
+                       hover:border-red-400/70 dark:hover:border-red-400/50
+                       transition-all duration-150"
+          >
+            Retry
+          </button>
+        )}
+      </div>
+
       <button
         onClick={() => setIsDark((d) => !d)}
         aria-label="Toggle dark mode"
