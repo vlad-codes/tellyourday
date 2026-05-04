@@ -1,5 +1,12 @@
 export type Mode = 'day' | 'mind';
 
+export type AppStatus =
+  | 'loading'
+  | 'no-ollama'
+  | 'starting-ollama'
+  | 'no-model'
+  | 'ready';
+
 export interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;

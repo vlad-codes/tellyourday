@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { invoke } from '@tauri-apps/api/core';
-import type { ChatMessage, Mode } from './types';
+import type { AppStatus, ChatMessage, Mode } from './types';
 import Sidebar from './components/Sidebar';
 import Chat from './components/Chat';
 import ArchiveModal from './components/ArchiveModal';
-import Onboarding, { type AppStatus } from './components/Onboarding';
+import Onboarding from './components/Onboarding';
 
 const API = 'http://localhost:8000';
 
@@ -43,7 +43,7 @@ export default function App() {
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    if (appStatus === 'ready') return;
+    if (appStatus === 'ready' || appStatus === 'no-ollama' || appStatus === 'no-model') return;
     let cancelled = false;
 
     async function poll() {
@@ -53,7 +53,17 @@ export default function App() {
           if (!r.ok) throw new Error('not ok');
           const s: StatusResponse = await r.json();
           if (cancelled) return;
-          if (!s.ollama_running) { setAppStatus('no-ollama'); return; }
+
+          if (!s.ollama_running) {
+            const installed: boolean = await invoke('check_ollama_installed');
+            if (cancelled) return;
+            if (!installed) { setAppStatus('no-ollama'); return; }
+            // Installed but not yet running — show spinner and keep polling
+            if (appStatus !== 'starting-ollama') setAppStatus('starting-ollama');
+            await new Promise((res) => setTimeout(res, 1000));
+            continue;
+          }
+
           if (s.models.length === 0) { setAppStatus('no-model'); return; }
           setModels(s.models); setSelectedModel(s.models[0]); setAppStatus('ready'); return;
         } catch {
@@ -64,7 +74,7 @@ export default function App() {
 
     poll();
     return () => { cancelled = true; };
-  }, [appStatus]);
+  }, [appStatus]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Tauri close handler — auto-save all modes with unsaved history
   useEffect(() => {

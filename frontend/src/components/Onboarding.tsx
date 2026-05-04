@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-
-export type AppStatus = 'loading' | 'no-ollama' | 'no-model' | 'ready';
+import { open } from '@tauri-apps/plugin-shell';
+import type { AppStatus } from '../types';
 
 interface Props {
   status: AppStatus;
@@ -9,10 +9,15 @@ interface Props {
 }
 
 const MODELS = [
-  { ram: '8 GB',  model: 'llama3.2:3b',   size: '2.0 GB' },
-  { ram: '16 GB', model: 'llama3.1:8b',   size: '4.7 GB' },
-  { ram: '32 GB', model: 'qwen2.5:32b',   size: '20 GB'  },
+  { ram: '8 GB',  model: 'llama3.2:3b',  size: '2.0 GB' },
+  { ram: '16 GB', model: 'llama3.1:8b',  size: '4.7 GB' },
+  { ram: '32 GB', model: 'qwen2.5:32b',  size: '20 GB'  },
 ];
+
+const EMBED_MODEL = 'nomic-embed-text';
+const EMBED_SIZE  = '274 MB';
+
+const API = 'http://localhost:8000';
 
 function CodeBlock({ code }: { code: string }) {
   const [copied, setCopied] = useState(false);
@@ -43,6 +48,93 @@ function CodeBlock({ code }: { code: string }) {
   );
 }
 
+type PullPhase =
+  | { phase: 'idle' }
+  | { phase: 'pulling'; status: string; pct: number }
+  | { phase: 'done' }
+  | { phase: 'error'; message: string };
+
+function PullProgress({ pullState }: { pullState: PullPhase }) {
+  if (pullState.phase === 'idle' || pullState.phase === 'done') return null;
+
+  if (pullState.phase === 'error') {
+    return (
+      <p className="mt-2 text-[11px] text-red-400 leading-relaxed">
+        {pullState.message}
+      </p>
+    );
+  }
+
+  const { status, pct } = pullState;
+  return (
+    <div className="mt-3">
+      <div className="w-full rounded-full bg-indigo-100/40 dark:bg-white/[0.06] h-1.5">
+        <div
+          className="h-full rounded-full bg-indigo-500 transition-all duration-300"
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+      <p className="mt-1.5 text-[11px] text-slate-400 dark:text-slate-500 leading-relaxed truncate">
+        {status || 'Connecting…'}
+        {pct > 0 && <span className="ml-1.5 font-mono text-indigo-400">{pct}%</span>}
+      </p>
+    </div>
+  );
+}
+
+function usePull(onDone: () => void) {
+  const [pullState, setPullState] = useState<PullPhase>({ phase: 'idle' });
+
+  function startPull(model: string) {
+    setPullState({ phase: 'pulling', status: 'Starting…', pct: 0 });
+
+    const es = new EventSource(`${API}/pull-model?model=${encodeURIComponent(model)}`);
+
+    es.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data) as {
+          status: string;
+          completed?: number;
+          total?: number;
+          error?: string;
+        };
+
+        if (data.status === 'done') {
+          es.close();
+          setPullState({ phase: 'done' });
+          setTimeout(onDone, 800);
+          return;
+        }
+
+        if (data.status === 'error') {
+          es.close();
+          setPullState({ phase: 'error', message: data.error ?? 'Unknown error' });
+          return;
+        }
+
+        const pct =
+          data.total && data.total > 0
+            ? Math.round(((data.completed ?? 0) / data.total) * 100)
+            : 0;
+        setPullState({ phase: 'pulling', status: data.status, pct });
+      } catch {
+        // ignore parse errors mid-stream
+      }
+    };
+
+    es.onerror = () => {
+      // EventSource auto-reconnects on network drops — only error out on persistent failure
+      // We leave the state as-is so the progress bar stays visible during reconnect
+    };
+  }
+
+  function reset() {
+    setPullState({ phase: 'idle' });
+  }
+
+  return { pullState, startPull, reset };
+}
+
 export default function Onboarding({ status, onRetry }: Props) {
   return (
     <div className="fixed inset-0 z-50 flex flex-col">
@@ -71,10 +163,10 @@ export default function Onboarding({ status, onRetry }: Props) {
             </p>
           </div>
 
-          {/* State-dependent content */}
-          {status === 'loading' && <LoadingScreen />}
-          {status === 'no-ollama' && <NoOllamaScreen onRetry={onRetry} />}
-          {status === 'no-model' && <NoModelScreen onRetry={onRetry} />}
+          {status === 'loading'          && <LoadingScreen />}
+          {status === 'starting-ollama'  && <StartingOllamaScreen onRetry={onRetry} />}
+          {status === 'no-ollama'        && <NoOllamaScreen onRetry={onRetry} />}
+          {status === 'no-model'         && <NoModelScreen onRetry={onRetry} />}
         </div>
       </div>
     </div>
@@ -96,6 +188,28 @@ function LoadingScreen() {
   );
 }
 
+function StartingOllamaScreen({ onRetry }: { onRetry: () => void }) {
+  return (
+    <div className="text-center">
+      <div className="inline-flex items-center gap-2.5 text-[13px] text-slate-500 dark:text-slate-400">
+        <span className="w-4 h-4 border-2 border-indigo-400/30 border-t-indigo-500
+                         rounded-full animate-spin shrink-0" />
+        Starting Ollama…
+      </div>
+      <p className="text-[11px] text-slate-400/60 dark:text-slate-600 mt-3">
+        This usually takes a few seconds.
+      </p>
+      <button
+        onClick={onRetry}
+        className="mt-6 text-[12px] text-slate-400 dark:text-slate-500
+                   hover:text-slate-600 dark:hover:text-slate-300 transition-colors"
+      >
+        Try again
+      </button>
+    </div>
+  );
+}
+
 function NoOllamaScreen({ onRetry }: { onRetry: () => void }) {
   return (
     <div className="glass-card rounded-2xl p-6">
@@ -106,46 +220,39 @@ function NoOllamaScreen({ onRetry }: { onRetry: () => void }) {
             Ollama not found
           </h2>
           <p className="text-[12px] text-slate-500 dark:text-slate-400 mt-1 leading-relaxed">
-            Telmi needs Ollama to run AI models locally. Install and start it once.
+            Telmi needs Ollama to run AI models locally. Install it once and Telmi will
+            start it automatically on launch.
           </p>
         </div>
       </div>
 
-      <div className="space-y-4">
+      <button
+        onClick={() => open('https://ollama.com/download/mac')}
+        className="w-full text-[13px] font-medium text-white
+                   bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700
+                   rounded-xl px-4 py-2.5 transition-all duration-150
+                   shadow-sm shadow-indigo-500/30"
+      >
+        Download Ollama →
+      </button>
+      <p className="text-[11px] text-slate-400/70 dark:text-slate-600 mt-2 text-center">
+        Opens ollama.com in your browser. After installing, relaunch Telmi.
+      </p>
+
+      <div className="mt-5 space-y-4">
         <div>
           <p className="text-[11px] font-semibold text-slate-500 dark:text-slate-400
                         uppercase tracking-wider mb-1">
-            1. Install (Homebrew)
+            Or via Homebrew
           </p>
           <CodeBlock code="brew install ollama" />
         </div>
-        <div>
-          <p className="text-[11px] font-semibold text-slate-500 dark:text-slate-400
-                        uppercase tracking-wider mb-1">
-            2. Start
-          </p>
-          <CodeBlock code="ollama serve" />
-        </div>
-        <p className="text-[11px] text-slate-400/70 dark:text-slate-600">
-          Or:{' '}
-          <a
-            href="https://ollama.com/download"
-            target="_blank"
-            rel="noreferrer"
-            className="text-indigo-500 dark:text-indigo-400 hover:underline"
-          >
-            ollama.com/download
-          </a>
-          {' '}→ Install the desktop app (starts automatically).
-        </p>
       </div>
 
       <button
         onClick={onRetry}
-        className="mt-6 w-full text-[13px] font-medium text-white
-                   bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700
-                   rounded-xl px-4 py-2.5 transition-all duration-150
-                   shadow-sm shadow-indigo-500/30"
+        className="mt-5 w-full text-[12px] text-slate-400 dark:text-slate-500
+                   hover:text-slate-600 dark:hover:text-slate-300 transition-colors"
       >
         Try again
       </button>
@@ -155,6 +262,17 @@ function NoOllamaScreen({ onRetry }: { onRetry: () => void }) {
 
 function NoModelScreen({ onRetry }: { onRetry: () => void }) {
   const [selectedModel, setSelectedModel] = useState(MODELS[0].model);
+  const [embedDone, setEmbedDone] = useState(false);
+
+  const chatPull = usePull(onRetry);
+  const embedPull = usePull(() => setEmbedDone(true));
+
+  const isPulling =
+    chatPull.pullState.phase === 'pulling' ||
+    embedPull.pullState.phase === 'pulling';
+
+  const chatDone = chatPull.pullState.phase === 'done';
+  const selectedMeta = MODELS.find((m) => m.model === selectedModel)!;
 
   return (
     <div className="glass-card rounded-2xl p-6">
@@ -165,13 +283,13 @@ function NoModelScreen({ onRetry }: { onRetry: () => void }) {
             No model installed
           </h2>
           <p className="text-[12px] text-slate-500 dark:text-slate-400 mt-1 leading-relaxed">
-            Choose a model that fits your RAM and download it.
+            Choose a model that fits your RAM and download it directly.
           </p>
         </div>
       </div>
 
       {/* Model picker */}
-      <div className="space-y-1.5 mb-4">
+      <div className={`space-y-1.5 mb-4 ${isPulling ? 'pointer-events-none opacity-60' : ''}`}>
         {MODELS.map((m) => (
           <button
             key={m.model}
@@ -198,18 +316,82 @@ function NoModelScreen({ onRetry }: { onRetry: () => void }) {
         ))}
       </div>
 
-      <CodeBlock code={`ollama pull ${selectedModel}`} />
+      {/* Download button + progress */}
+      {!chatDone ? (
+        <>
+          <button
+            onClick={() => chatPull.startPull(selectedModel)}
+            disabled={isPulling}
+            className="w-full text-[13px] font-medium text-white
+                       bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700
+                       rounded-xl px-4 py-2.5 transition-all duration-150
+                       shadow-sm shadow-indigo-500/30
+                       disabled:opacity-60 disabled:cursor-not-allowed"
+          >
+            {isPulling && chatPull.pullState.phase === 'pulling'
+              ? 'Downloading…'
+              : `Download ${selectedMeta.model} (${selectedMeta.size})`}
+          </button>
+          <PullProgress pullState={chatPull.pullState} />
+        </>
+      ) : (
+        <div className="flex items-center gap-2 text-[13px] text-emerald-500 font-medium py-1">
+          <span>✓</span>
+          <span>{selectedModel} downloaded</span>
+        </div>
+      )}
 
-      {/* Embedding model hint */}
-      <div className="mt-4 px-3.5 py-2.5 rounded-xl bg-slate-100/60 dark:bg-white/[0.04]
-                      border border-slate-200/50 dark:border-white/[0.06]">
-        <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
-          <span className="font-semibold text-slate-600 dark:text-slate-300">Recommended:</span>
-          {' '}For semantic search (from 15 entries on), also pull{' '}
-          <span className="font-mono text-[10.5px]">nomic-embed-text</span>:
-        </p>
-        <CodeBlock code="ollama pull nomic-embed-text" />
-      </div>
+      {/* Embed model — shown after chat model is done or as optional */}
+      {(chatDone || chatPull.pullState.phase === 'idle') && !embedDone && (
+        <div className="mt-4 px-3.5 py-3 rounded-xl bg-slate-100/60 dark:bg-white/[0.04]
+                        border border-slate-200/50 dark:border-white/[0.06]">
+          <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed mb-2">
+            <span className="font-semibold text-slate-600 dark:text-slate-300">Optional:</span>
+            {' '}For semantic search (from 15 entries on), also download{' '}
+            <span className="font-mono text-[10.5px]">{EMBED_MODEL}</span>{' '}
+            ({EMBED_SIZE}).
+          </p>
+          <button
+            onClick={() => embedPull.startPull(EMBED_MODEL)}
+            disabled={embedPull.pullState.phase === 'pulling'}
+            className="w-full text-[12px] font-medium
+                       text-indigo-600 dark:text-indigo-400
+                       bg-indigo-50/80 dark:bg-indigo-400/10
+                       hover:bg-indigo-100/80 dark:hover:bg-indigo-400/20
+                       border border-indigo-200/60 dark:border-indigo-400/20
+                       rounded-lg px-3 py-2 transition-all duration-150
+                       disabled:opacity-60 disabled:cursor-not-allowed"
+          >
+            {embedPull.pullState.phase === 'pulling'
+              ? 'Downloading…'
+              : `Download ${EMBED_MODEL}`}
+          </button>
+          <PullProgress pullState={embedPull.pullState} />
+        </div>
+      )}
+
+      {embedDone && (
+        <div className="mt-3 flex items-center gap-2 text-[11px] text-emerald-500">
+          <span>✓</span>
+          <span>{EMBED_MODEL} downloaded — semantic search enabled</span>
+        </div>
+      )}
+
+      {/* Manual fallback */}
+      {!isPulling && (
+        <details className="mt-4 group">
+          <summary className="text-[11px] text-slate-400 dark:text-slate-500 cursor-pointer
+                              hover:text-slate-500 dark:hover:text-slate-400 transition-colors
+                              list-none flex items-center gap-1">
+            <span className="group-open:rotate-90 inline-block transition-transform duration-150">▶</span>
+            Manual install via terminal
+          </summary>
+          <div className="mt-2">
+            <CodeBlock code={`ollama pull ${selectedModel}`} />
+            <CodeBlock code={`ollama pull ${EMBED_MODEL}`} />
+          </div>
+        </details>
+      )}
 
       <button
         onClick={onRetry}

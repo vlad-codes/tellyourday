@@ -383,6 +383,27 @@ def list_models():
         return []
 
 
+@app.get("/pull-model")
+def pull_model(model: str = Query(...)):
+    def generate():
+        try:
+            for progress in ollama.pull(model, stream=True):
+                data = json.dumps({
+                    "status": progress.get("status", ""),
+                    "completed": progress.get("completed", 0),
+                    "total": progress.get("total", 0),
+                })
+                yield f"data: {data}\n\n"
+            yield 'data: {"status":"done"}\n\n'
+        except Exception as e:
+            yield f'data: {{"status":"error","error":{json.dumps(str(e))}}}\n\n'
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 @app.post("/chat")
 def chat(request: ChatRequest):
     relevant         = get_relevant_entries(request.user_input)

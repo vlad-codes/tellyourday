@@ -4,11 +4,45 @@ use tauri_plugin_shell::ShellExt;
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 
 struct BackendProcess(Mutex<Option<CommandChild>>);
+struct OllamaProcess(Mutex<Option<std::process::Child>>);
+
+fn find_ollama_binary() -> Option<String> {
+    let candidates = [
+        "/usr/local/bin/ollama",
+        "/opt/homebrew/bin/ollama",
+        "/opt/local/bin/ollama",
+    ];
+    candidates
+        .iter()
+        .find(|p| std::path::Path::new(p).exists())
+        .map(|p| p.to_string())
+}
+
+fn ollama_already_running() -> bool {
+    std::net::TcpStream::connect_timeout(
+        &"127.0.0.1:11434".parse().unwrap(),
+        std::time::Duration::from_millis(300),
+    )
+    .is_ok()
+}
 
 #[tauri::command]
-fn quit_app(state: tauri::State<BackendProcess>) {
-    if let Ok(mut guard) = state.0.lock() {
+fn check_ollama_installed() -> bool {
+    find_ollama_binary().is_some()
+}
+
+#[tauri::command]
+fn quit_app(
+    backend: tauri::State<BackendProcess>,
+    ollama: tauri::State<OllamaProcess>,
+) {
+    if let Ok(mut guard) = backend.0.lock() {
         if let Some(child) = guard.take() {
+            let _ = child.kill();
+        }
+    }
+    if let Ok(mut guard) = ollama.0.lock() {
+        if let Some(mut child) = guard.take() {
             let _ = child.kill();
         }
     }
@@ -19,7 +53,7 @@ fn quit_app(state: tauri::State<BackendProcess>) {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
-        .invoke_handler(tauri::generate_handler![quit_app])
+        .invoke_handler(tauri::generate_handler![quit_app, check_ollama_installed])
         .setup(|app| {
             if cfg!(debug_assertions) {
                 app.handle().plugin(
@@ -61,6 +95,23 @@ pub fn run() {
             });
 
             app.manage(BackendProcess(Mutex::new(Some(child))));
+
+            // Auto-start Ollama if installed but not already running
+            let ollama_child: Option<std::process::Child> = if let Some(binary) = find_ollama_binary() {
+                if !ollama_already_running() {
+                    std::process::Command::new(&binary)
+                        .arg("serve")
+                        .stdout(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null())
+                        .spawn()
+                        .ok()
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            app.manage(OllamaProcess(Mutex::new(ollama_child)));
 
             #[cfg(target_os = "macos")]
             {
