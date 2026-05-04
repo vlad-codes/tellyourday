@@ -123,16 +123,22 @@ export default function LifeDashboard({ onDayClick, onOpenArchive, refreshKey }:
   }, [statsPinned]);
 
   useEffect(() => {
-    fetch(`${API}/calendar-data`)
-      .then((r) => {
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        return r.json();
-      })
-      .then((data: unknown) => {
-        if (!Array.isArray(data)) return;
-        setCalDays(data as CalendarDay[]);
-      })
-      .catch(() => {});
+    let cancelled = false;
+    async function fetchCalendar(retries = 5) {
+      for (let i = 0; i < retries; i++) {
+        try {
+          const r = await fetch(`${API}/calendar-data`);
+          if (r.ok) {
+            const data: unknown = await r.json();
+            if (!cancelled && Array.isArray(data)) setCalDays(data as CalendarDay[]);
+            return;
+          }
+        } catch {}
+        await new Promise((res) => setTimeout(res, 1000));
+      }
+    }
+    fetchCalendar();
+    return () => { cancelled = true; };
   }, [refreshKey]);
 
   // Keep last entry per date (chronological order → last wins)

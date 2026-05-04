@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { invoke } from '@tauri-apps/api/core';
 import type { ChatMessage, Mode } from './types';
 import Sidebar from './components/Sidebar';
 import Chat from './components/Chat';
@@ -70,14 +71,16 @@ export default function App() {
 
     win.onCloseRequested(async (event) => {
       event.preventDefault();
-      const modes: Mode[] = ['day', 'mind'];
-      for (const m of modes) {
-        const h = historyRef.current[m];
-        if (!savedRef.current[m] && h.length > 1) {
-          await doSave(m, h);
+      try {
+        const modes: Mode[] = ['day', 'mind'];
+        for (const m of modes) {
+          const h = historyRef.current[m];
+          if (!savedRef.current[m] && h.length > 1) {
+            await doSave(m, h);
+          }
         }
-      }
-      win.destroy();
+      } catch {}
+      await invoke('quit_app');
     }).then((fn) => { unlistenFn = fn; });
 
     return () => { unlistenFn?.(); };
